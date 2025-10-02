@@ -1,0 +1,16 @@
+name: 2wins_binary_classification
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+  - https://repo.anaconda.com/pkgs/msys2
+dependencies:
+  - pytorch
+  - pytorch-cuda=11.8
+  - torchaudio
+  - torchvision
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - conda-forge::grad-cam
+  - psutil
+prefix: C:\Users\10691\.conda\envs\2wins_binary_classification

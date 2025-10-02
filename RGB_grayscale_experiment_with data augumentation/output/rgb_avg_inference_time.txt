@@ -1,1 +1,1 @@
-Average inference time per image: 0.0027 seconds
+Average inference time per image: 0.0026 seconds

@@ -32,6 +32,8 @@ the RGB image will be influence by the background sometime(red part)
 
 ![RGB image](./RGB_grayscale_experiment_with%20data%20augumentation/RBG_influenced_by_bg.png "RBG image")
 
+![RGB image](./RGB_grayscale_experiment_with%20data%20augumentation/RGB.png "RBG image")
+
 at the same time, the gray scale image concentrates on the "bad" part
 
 ![Grayscale image](./RGB_grayscale_experiment_with%20data%20augumentation/grayscale_bg.png "Grayscale image")
@@ -66,4 +68,10 @@ according to my experience, the real factory will use GPU or Edge AI.
 
 so the Inference Speed is fast enough
 
-### Change to Docker environment
+# visualize log
+
+I need to add a visualize log when it's the real factory environment.
+
+to try more lite model
+
+https://link.springer.com/chapter/10.1007/978-981-96-0805-8_11
