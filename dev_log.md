@@ -57,6 +57,8 @@ GPU 0: NVIDIA GeForce RTX 2070 with Max-Q Design
   - Total Memory: 8.00 GB
   - CUDA Capability: 7.5
 
+
+
 ### Inference Speed
 CUDA avg inference time: 0.002124 s/image
 
@@ -64,14 +66,18 @@ CPU avg inference time: 0.042809 s/image
 
 ![Inference Speed image](./GPU_CPU_speed_experiment/inference_speed_comparison_gray.png "Inference Speed image")
 
-according to my experience, the real factory will use GPU or Edge AI.
-
 so the Inference Speed is fast enough
 
 # visualize log
 
 I need to add a visualize log when it's the real factory environment.
 
-to try more lite model
+![Log image](./visualize_log/05_IMG_2E420008_2025-02-24_14-56-14_000197_GlossRatio_cropped.png_gradcam.png "Log image")
 
-https://link.springer.com/chapter/10.1007/978-981-96-0805-8_11
+according to my experience, the real factory will use GPU or Edge AI.
+
+# to try more lite model
+
+for resnet50, it need 360MB or more, so we need to try more lite model when we consider edge AI.
+
+after the experiment, I decide to use MobileNetV3-Large model.

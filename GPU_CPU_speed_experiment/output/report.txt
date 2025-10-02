@@ -6,7 +6,12 @@ RAM: 15.84 GB
 GPU 0: NVIDIA GeForce RTX 2070 with Max-Q Design
   - Total Memory: 8.00 GB
   - CUDA Capability: 7.5
+Model Size (state_dict): 90.00 MB
 
-===== Inference Speed =====
-CUDA avg inference time: 0.002124 s/image
-CPU avg inference time: 0.042809 s/image
+===== Inference Benchmark =====
+Model parameter size: 89.69 MB
+Model state_dict size: 90.00 MB
+Total model size: 179.69 MB
+CPU avg inference time: 0.047091 s/image
+CUDA avg inference time: 0.002041 s/image
+
