@@ -1,0 +1,12 @@
+===== Hardware Info =====
+CPU: Intel64 Family 6 Model 165 Stepping 2, GenuineIntel
+CPU Cores (logical): 12
+CPU Frequency: 2592.00 MHz
+RAM: 15.84 GB
+GPU 0: NVIDIA GeForce RTX 2070 with Max-Q Design
+  - Total Memory: 8.00 GB
+  - CUDA Capability: 7.5
+
+===== Inference Speed =====
+CUDA avg inference time: 0.002124 s/image
+CPU avg inference time: 0.042809 s/image

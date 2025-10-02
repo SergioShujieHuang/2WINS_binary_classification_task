@@ -39,3 +39,31 @@ at the same time, the gray scale image concentrates on the "bad" part
 Also there is no significant difference in confusion_matrix and ROC
 
 So based on this experiment, I choose to use grayscale image as input.
+
+because the current model resnet50 is enough SOTA. I think I need to test the speed on GPU and CPU.
+
+# experiment on the prediction speed of GPU and CPU
+### Hardware Info
+CPU: Intel64 Family 6 Model 165 Stepping 2, GenuineIntel
+
+CPU Cores (logical): 12
+
+CPU Frequency: 2592.00 MHz
+RAM: 15.84 GB
+
+GPU 0: NVIDIA GeForce RTX 2070 with Max-Q Design
+  - Total Memory: 8.00 GB
+  - CUDA Capability: 7.5
+
+### Inference Speed
+CUDA avg inference time: 0.002124 s/image
+
+CPU avg inference time: 0.042809 s/image
+
+![Inference Speed image](./GPU_CPU_speed_experiment/inference_speed_comparison_gray.png "Inference Speed image")
+
+according to my experience, the real factory will use GPU or Edge AI.
+
+NVIDIA Jetson or Intel OpenVINO / Coral TPU
+
+so I 
