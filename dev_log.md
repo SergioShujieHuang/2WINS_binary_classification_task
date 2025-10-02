@@ -64,6 +64,6 @@ CPU avg inference time: 0.042809 s/image
 
 according to my experience, the real factory will use GPU or Edge AI.
 
-NVIDIA Jetson or Intel OpenVINO / Coral TPU
+so the Inference Speed is fast enough
 
-so I 
+### Change to Docker environment
