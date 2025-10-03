@@ -81,3 +81,59 @@ according to my experience, the real factory will use GPU or Edge AI.
 for resnet50, it need 360MB or more, so we need to try more lite model when we consider edge AI.
 
 after the experiment, I decide to use MobileNetV3-Large model.
+
+# Change to Docker
+
+
+# after feedback meeting (Thks for MR.Teshima !!!)
+- 1. set the priority of evaluation metrics
+False Negative Rate / Miss Rate >> False Positive Rate >> Inference Latency >> Resource Cost (model size, deployment cost)
+- 2. Change to Docker
+- 3. finish the ppt
+
+# Change evaluation metrics
+ the result shows that the FNR and FPR is very large, means it's not good.
+ so I am consider to change to Focal Loss, and do more date Augumentation.
+
+ (1) 损失函数
+
+把 Focal Loss 改成 加权 CrossEntropyLoss，直接拉高坏品的权重。
+
+use_focal_loss = False
+use_class_weight_loss = True
+
+
+这样：
+
+w_good = 1.0
+w_bad = float(good_count / (bad_count + 1e-8)) * 2.0  # 再提高一点坏品权重
+class_weights = torch.tensor([w_good, w_bad], dtype=torch.float).to(device)
+criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+(2) Early Stopping 改用 FNR
+
+把早停条件从 val_loss 换成 FNR，让模型更偏向降低漏检。
+
+(3) 调整数据增强
+
+坏品样本不要过度旋转、裁剪，否则可能把缺陷信息裁掉。
+建议坏品图像只做轻微增强，比如：
+
+transforms.RandomHorizontalFlip(),
+transforms.RandomVerticalFlip(),
+
+(4) 阈值调节
+
+你现在是 argmax(outputs)，其实可以用 概率阈值调节。
+比如：
+
+preds = (probs > 0.3).long()   # 把阈值从 0.5 降低到 0.3
+
+这样能降低 FNR（但 FPR 可能稍微升高）。
+
+Using class weights for loss: good=1.0, bad=5.738
+
+考虑使用更好的模型
+
+手动拆分过程中导致可能训练集中没有任何一个bad，改成分层拆分版本
+

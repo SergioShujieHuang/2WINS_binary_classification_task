@@ -6,18 +6,21 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import transforms, models
 from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split
 from PIL import Image
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import time
 import tempfile
 import numpy as np
+from collections import Counter
 
 # ---------------- 配置（可调） ----------------
-use_class_weight_loss = False    # 是否使用 CrossEntropy 的 class weight
-use_focal_loss = True          # 是否使用 Focal Loss（会覆盖 class_weight_loss）
-use_weighted_sampler = True     # 是否在训练时使用 WeightedRandomSampler（对 bad 过采样）
+use_class_weight_loss = True     # ✅ 改成加权 CrossEntropyLoss
+use_focal_loss = False           # ✅ 不再使用 Focal Loss
+use_weighted_sampler = True      
 batch_size = 4
+decision_threshold = 0.3         # ✅ 调整阈值，降低 FNR
 
 # ---------------- 路径设置 ----------------
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,16 +36,33 @@ def split_dataset(dataset_dir, train_ratio=0.7, valid_ratio=0.15, seed=42):
                            for f in os.listdir(os.path.join(dataset_dir, cls))
                            if os.path.isfile(os.path.join(dataset_dir, cls, f))] 
                      for cls in classes}
-    train_files, valid_files, test_files = [], [], []
-    for cls, files in class_to_imgs.items():
-        random.shuffle(files)
-        n = len(files)
-        n_train = int(n * train_ratio)
-        n_valid = int(n * valid_ratio)
-        train_files += [(f, cls) for f in files[:n_train]]
-        valid_files += [(f, cls) for f in files[n_train:n_train+n_valid]]
-        test_files  += [(f, cls) for f in files[n_train+n_valid:]]
+
+    # 整理成列表 [(path, cls)]
+    all_files = [(f, cls) for cls, files in class_to_imgs.items() for f in files]
+    labels = [cls for _, cls in all_files]
+
+    # 先拆 test（保证 stratify）
+    test_size = 1 - (train_ratio + valid_ratio)
+    train_val_files, test_files = train_test_split(
+        all_files, test_size=test_size, stratify=labels, random_state=seed
+    )
+
+    # 再从 train_val 拆 valid
+    train_size_adjusted = train_ratio / (train_ratio + valid_ratio)  # 比例调整
+    train_files, valid_files = train_test_split(
+        train_val_files, test_size=1-train_size_adjusted,
+        stratify=[cls for _, cls in train_val_files], random_state=seed
+    )
+
     print(f"Train: {len(train_files)}, Valid: {len(valid_files)}, Test: {len(test_files)}")
+    def count_classes(file_list):
+        labels = [cls for _, cls in file_list]
+        return Counter(labels)
+
+    print(f"Train: {len(train_files)}, distribution: {count_classes(train_files)}")
+    print(f"Valid: {len(valid_files)}, distribution: {count_classes(valid_files)}")
+    print(f"Test:  {len(test_files)}, distribution: {count_classes(test_files)}")
+
     return train_files, valid_files, test_files
 
 class CustomImageDataset(torch.utils.data.Dataset):
@@ -67,9 +87,9 @@ class CustomImageDataset(torch.utils.data.Dataset):
 train_transform_gray = transforms.Compose([
     transforms.Resize((224,224)),
     transforms.Grayscale(num_output_channels=3),
-    transforms.RandomRotation(30),
-    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02),
+    # ✅ 调整增强策略：只做轻微增强，避免破坏坏品特征
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomVerticalFlip(),
     transforms.ToTensor(),
     transforms.Normalize([0.485]*3, [0.229]*3)
 ])
@@ -88,7 +108,7 @@ train_dataset_gray = CustomImageDataset(train_files, transform=train_transform_g
 valid_dataset_gray = CustomImageDataset(valid_files, transform=eval_transform_gray, to_gray=True)
 test_dataset_gray  = CustomImageDataset(test_files,  transform=eval_transform_gray, to_gray=True)
 
-# 计算训练集类别分布（用于权重与采样）
+# 计算训练集类别分布
 def get_label_list(file_list):
     label_map = {'good':0, 'bad':1}
     return [label_map[cls] for (_, cls) in file_list]
@@ -98,9 +118,8 @@ good_count = sum(1 for l in train_labels if l == 0)
 bad_count = sum(1 for l in train_labels if l == 1)
 print(f"Train distribution -> good: {good_count}, bad: {bad_count}")
 
-# 创建 sampler（如果需要）
+# 创建 sampler
 if use_weighted_sampler:
-    # 为每个样本分配权重，bad 权重更高
     weight_per_class = {0: 1.0, 1: (good_count / (bad_count + 1e-8))}
     sample_weights = [weight_per_class[l] for l in train_labels]
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
@@ -116,6 +135,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 # ---------------- 模型列表 ----------------
+# model_names = ["resnet50"]
 model_names = ["resnet50", "resnet18", "mobilenet_v2", "mobilenet_v3_large", "squeezenet1_0"]
 
 def get_model(name, num_classes=2):
@@ -142,56 +162,49 @@ def get_model(name, num_classes=2):
         raise ValueError(f"Unknown model name {name}")
     return model.to(device)
 
-# ---------------- 损失函数（支持 class weight / focal） ----------------
-# 1) class weights for CrossEntropy
+# ---------------- 损失函数（改成加权 CE） ----------------
 class_weights = None
-if use_class_weight_loss and not use_focal_loss:
-    # 为 CrossEntropyLoss 提供权重 tensor (length = num_classes)
-    # 设定 bad 的权重为 good_count/bad_count（反比例）
+if use_class_weight_loss:
     w_good = 1.0
-    w_bad = float(good_count / (bad_count + 1e-8))
+    w_bad = float(good_count / (bad_count + 1e-8)) * 2.0  # ✅ 再提高一点坏品权重
     class_weights = torch.tensor([w_good, w_bad], dtype=torch.float).to(device)
     print(f"Using class weights for loss: good={w_good}, bad={w_bad:.3f}")
-
-# 2) focal loss (multi-class)
-class FocalLossMulti(nn.Module):
-    def __init__(self, gamma=2.0, weight=None, reduction='mean'):
-        super().__init__()
-        self.gamma = gamma
-        self.weight = weight  # expects tensor of shape [num_classes]
-        self.reduction = reduction
-    def forward(self, logits, targets):
-        """
-        logits: [B, C], targets: [B] (long)
-        """
-        ce = nn.functional.cross_entropy(logits, targets, weight=self.weight, reduction='none')  # [B]
-        pt = torch.exp(-ce)  # p_t
-        loss = ((1 - pt) ** self.gamma) * ce
-        if self.reduction == 'mean':
-            return loss.mean()
-        elif self.reduction == 'sum':
-            return loss.sum()
-        else:
-            return loss
-
+ 
 def get_criterion():
-    if use_focal_loss:
-        weight = None
-        if use_class_weight_loss:
-            weight = class_weights
-        print("Using FocalLossMulti")
-        return FocalLossMulti(gamma=2.0, weight=weight)
+    if use_class_weight_loss:
+        return nn.CrossEntropyLoss(weight=class_weights)
     else:
-        if use_class_weight_loss:
-            print("Using CrossEntropyLoss with class weights")
-            return nn.CrossEntropyLoss(weight=class_weights)
-        else:
-            print("Using standard CrossEntropyLoss")
-            return nn.CrossEntropyLoss()
+        return nn.CrossEntropyLoss()
 
-# ---------------- 训练 + Early Stopping ----------------
-def train_model_early_stopping(model, optimizer, train_loader, valid_loader, criterion, max_epochs=20, patience=3):
-    best_val_loss = float('inf')
+# ---------------- 验证 FNR + FPR ----------------
+def calculate_fnr_fpr(model, valid_loader):
+    model.eval()
+    all_labels, all_preds = [], []
+    with torch.no_grad():
+        for imgs, labels in valid_loader:
+            imgs, labels = imgs.to(device), labels.to(device)
+            outputs = model(imgs)
+            probs = torch.softmax(outputs, dim=1)[:,1]
+            preds = (probs > decision_threshold).long()
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(preds.cpu().numpy())
+    cm = confusion_matrix(all_labels, all_preds, labels=[0,1])
+    tn, fp, fn, tp = cm.ravel()
+    fnr = fn / (fn + tp + 1e-8)
+    fpr = fp / (fp + tn + 1e-8)
+    return fnr, fpr
+
+# ---------------- 复合指标（优先 FNR，次要 FPR） ----------------
+def combined_score(fnr, fpr, alpha=0.6):
+    """
+    alpha 控制权重：越大越优先 FNR
+    """
+    return alpha * fnr + (1 - alpha) * fpr
+
+# ---------------- 训练 + Early Stopping (优先 FNR, 次要 FPR) ----------------
+def train_model_early_stopping(model, optimizer, train_loader, valid_loader, criterion,
+                               max_epochs=20, patience=3, alpha=0.8):
+    best_score = float('inf')  # 最小化复合指标
     trigger_times = 0
     best_model_state = None
 
@@ -209,21 +222,14 @@ def train_model_early_stopping(model, optimizer, train_loader, valid_loader, cri
             running_loss += loss.item() * imgs.size(0)
 
         epoch_train_loss = running_loss / len(train_loader.dataset)
-        # ---- 验证 ----
-        model.eval()
-        val_losses = []
-        with torch.no_grad():
-            for imgs, labels in valid_loader:
-                imgs, labels = imgs.to(device), labels.to(device)
-                outputs = model(imgs)
-                loss = criterion(outputs, labels)
-                val_losses.append(loss.item())
-        avg_val_loss = np.mean(val_losses) if len(val_losses) > 0 else float('inf')
-        print(f"Epoch {epoch+1} - Train Loss: {epoch_train_loss:.4f} - Validation Loss: {avg_val_loss:.4f}")
 
-        # ---- Early Stopping 判断 ----
-        if avg_val_loss < best_val_loss - 1e-4:
-            best_val_loss = avg_val_loss
+        # ---- 验证 (复合指标) ----
+        fnr, fpr = calculate_fnr_fpr(model, valid_loader)
+        score = combined_score(fnr, fpr, alpha)
+        print(f"Epoch {epoch+1} - Train Loss: {epoch_train_loss:.4f} - FNR: {fnr:.4f} - FPR: {fpr:.4f} - Score: {score:.4f}")
+
+        if score < best_score - 1e-4:
+            best_score = score
             trigger_times = 0
             best_model_state = model.state_dict()
         else:
@@ -232,7 +238,6 @@ def train_model_early_stopping(model, optimizer, train_loader, valid_loader, cri
                 print(f"Early stopping at epoch {epoch+1}")
                 break
 
-    # 恢复最佳模型
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
     return model
@@ -254,14 +259,19 @@ def evaluate_model(model, test_loader):
             total_infer_time += infer_time
             total_samples += imgs.size(0)
 
-            probs = torch.softmax(outputs, dim=1)[:,1]  # bad 的概率
-            preds = torch.argmax(outputs, dim=1)
+            probs = torch.softmax(outputs, dim=1)[:,1]
+            preds = (probs > decision_threshold).long()  # ✅ 使用调整后的阈值
 
             all_labels.extend(labels.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_probs.extend(probs.cpu().numpy())
 
-    # 模型大小（参数 + 保存的 state_dict）
+    cm = confusion_matrix(all_labels, all_preds, labels=[0,1])
+    tn, fp, fn, tp = cm.ravel()
+    fnr = fn / (fn + tp + 1e-8)
+    fpr = fp / (fp + tn + 1e-8)
+
+    # 模型大小
     param_size = sum(p.numel()*p.element_size() for p in model.parameters()) / (1024**2)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pt") as tmpfile:
         torch.save(model.state_dict(), tmpfile.name)
@@ -269,10 +279,9 @@ def evaluate_model(model, test_loader):
     os.remove(tmpfile.name)
     total_model_size = param_size + state_dict_size
 
-    # 平均推理时间（秒/张）
     avg_infer_time = total_infer_time / (total_samples + 1e-8)
 
-    return all_labels, all_preds, all_probs, total_model_size, avg_infer_time
+    return all_labels, all_preds, all_probs, total_model_size, avg_infer_time, fnr, fpr
 
 # ---------------- 运行 benchmark ----------------
 if __name__ == '__main__':
@@ -281,14 +290,15 @@ if __name__ == '__main__':
         print(f"\n==== Training {name} with Early Stopping ====")
         model = get_model(name)
         optimizer = optim.Adam(model.parameters(), lr=1e-4)
-        model = train_model_early_stopping(model, optimizer, train_loader_gray, valid_loader_gray, criterion, max_epochs=20, patience=3)
+        criterion = get_criterion()  
+        model = train_model_early_stopping(
+            model, optimizer,
+            train_loader_gray, valid_loader_gray,
+            criterion, max_epochs=20, patience=3
+        )
 
         print(f"==== Evaluating {name} ====")
-        labels, preds, probs, size, avg_time = evaluate_model(model, test_loader_gray)
-        cm = confusion_matrix(labels, preds)
-        fn, fp, tn, tp = cm.ravel() if cm.size == 4 else (0,0,0,0)
-        fnr = fn / (fn + tp + 1e-8)
-        fpr = fp / (fp + tn + 1e-8)
+        labels, preds, probs, size, avg_time, fnr, fpr = evaluate_model(model, test_loader_gray)
         summary.append((name, fnr, fpr, size, avg_time))
 
     # 排序 FNR > FPR > Size > AvgTime
@@ -304,7 +314,7 @@ if __name__ == '__main__':
     table.auto_set_font_size(False)
     table.set_fontsize(10)
     table.scale(1.2, 1.2)
-    plt.title("Benchmark Comparison with Early Stopping", fontsize=14, pad=20)
+    plt.title("Benchmark Comparison (Early Stopping on FNR)", fontsize=14, pad=20)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "benchmark_comparison.png"))
     plt.close()
